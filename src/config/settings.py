@@ -84,7 +84,7 @@ class Configuration(IConfiguration):
     
     def get_model_name(self) -> str:
         """Get the model name to use."""
-        return os.getenv("GROQ_MODEL", "llama3-70b-8192")
+        return os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     
     def get_max_tokens(self) -> int:
         """Get the maximum tokens for responses."""

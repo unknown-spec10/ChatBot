@@ -44,9 +44,9 @@ ingestion.log
 tfidf_cache.pkl
 .cache/
 
-# ChromaDB
-chroma_db/
-*.sqlite3
+# ChromaDB - Keep for Streamlit Cloud RAG functionality
+# chroma_db/ - INCLUDED for deployment
+# *.sqlite3 - INCLUDED for deployment
 
 # Jupyter Notebook
 .ipynb_checkpoints/
@@ -88,8 +88,8 @@ Desktop.ini
 *.bak
 *.swp
 *~
-#streamlit
-.streamlit/
+#streamlit secrets only - keep config.toml for deployment
+.streamlit/secrets.toml
 
-# Data files
-data/
+# Data files - Keep source documents for RAG
+# data/ - INCLUDED for deployment
