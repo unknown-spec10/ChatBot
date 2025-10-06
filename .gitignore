@@ -88,5 +88,5 @@ Desktop.ini
 *.bak
 *.swp
 *~
-#streamlit secrets only - keep config.toml for deployment
+#streamlit secrets only 
 .streamlit/secrets.toml

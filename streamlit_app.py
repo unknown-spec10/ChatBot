@@ -1,8 +1,13 @@
 """
 Streamlit Cloud Deployment Entry Point
 
-This is the main entry point that Streamlit Cloud expects for deployment.
-It properly handles secrets, environment configuration, and cloud-specific requirements.
+This is the main entry point that Streamlit Cloud expects for deployment.                            else:
+                                vector_store = None
+                        else:
+                            vector_store = None
+                            
+                    except Exception:
+                        vector_store = Noney handles secrets, environment configuration, and cloud-specific requirements.
 """
 
 import sys
@@ -67,37 +72,18 @@ def create_chatbot() -> AgenticChatbot:
             # Use a cloud-appropriate directory for vector store
             persist_dir = "./chroma_db"
             
-            # Debug: Check if ChromaDB directory exists
-            if os.path.exists(persist_dir):
-                st.info(f"📁 ChromaDB directory found at: {persist_dir}")
-                # List contents for debugging
-                contents = os.listdir(persist_dir) if os.path.isdir(persist_dir) else []
-                st.info(f"📋 ChromaDB contents: {contents}")
-            else:
-                st.error(f"❌ ChromaDB directory not found at: {persist_dir}")
-                vector_store = None
-                return AgenticChatbot(
-                    ai_provider=ai_provider,
-                    message_handler=message_handler,
-                    config=config,
-                    vector_store=None
-                )
-            
-            # Try to initialize vector store with error handling
+            # Initialize vector store
             try:
                 vector_store = EnhancedChromaVectorStore(
                     embedding_service=embedding_service,
                     persist_directory=persist_dir
                 )
                 
-                # Check if pre-computed embeddings exist
+                # Check if pre-computed embeddings exist and auto-load if needed
                 stats = vector_store.get_collection_stats()
-                if stats.get('total_chunks', 0) > 0:
-                    st.success(f"✅ RAG System: {stats['total_chunks']} document chunks loaded from pre-computed embeddings")
-                else:
-                    st.warning("⚠️ RAG System: No pre-computed embeddings found - attempting to load documents...")
+                if stats.get('total_chunks', 0) == 0:
                     
-                    # Try to auto-ingest documents in cloud environment
+                    # Try to auto-ingest documents silently
                     try:
                         from src.rag.document_processor import DocumentProcessor
                         from pathlib import Path
@@ -107,7 +93,6 @@ def create_chatbot() -> AgenticChatbot:
                         documents_dir = data_dir / "documents"
                         
                         if documents_dir.exists() and any(documents_dir.iterdir()):
-                            st.info("📄 Found documents - initializing RAG system...")
                             
                             # Initialize document processor
                             processor = DocumentProcessor(
@@ -124,28 +109,19 @@ def create_chatbot() -> AgenticChatbot:
                             ]
                             
                             if doc_files:
-                                st.info(f"🔄 Processing {len(doc_files)} document(s)...")
-                                
-                                # Process documents
+                                # Process documents silently
                                 all_chunks = []
                                 for doc_file in doc_files:
                                     try:
                                         chunks = processor.process_document(str(doc_file))
                                         all_chunks.extend(chunks)
-                                        st.info(f"✅ Processed {doc_file.name}: {len(chunks)} chunks")
-                                    except Exception as doc_error:
-                                        st.warning(f"⚠️ Failed to process {doc_file.name}: {doc_error}")
+                                    except Exception:
+                                        continue  # Skip failed files silently
                                 
                                 if all_chunks:
-                                    # Add chunks to vector store
-                                    st.info(f"💾 Adding {len(all_chunks)} chunks to vector store...")
+                                    # Add chunks to vector store silently
                                     vector_store.add_chunks(all_chunks)
-                                    
-                                    # Verify ingestion
-                                    final_stats = vector_store.get_collection_stats()
-                                    st.success(f"✅ RAG System initialized: {final_stats['total_chunks']} document chunks loaded")
                                 else:
-                                    st.error("❌ No document chunks were created")
                                     vector_store = None
                             else:
                                 st.error(f"❌ No supported documents found in {documents_dir}")
@@ -160,13 +136,10 @@ def create_chatbot() -> AgenticChatbot:
                         st.info("�🔄 Running without RAG functionality - using general AI knowledge only")
                         vector_store = None
                     
-            except Exception as vs_error:
-                st.error(f"❌ ChromaDB initialization failed: {str(vs_error)}")
-                st.info("🔄 Running without RAG functionality")
+            except Exception:
                 vector_store = None
                 
-        except Exception as e:
-            st.warning(f"⚠️ RAG System: Limited functionality - {str(e)}")
+        except Exception:
             vector_store = None
         
         chatbot = AgenticChatbot(
@@ -196,29 +169,20 @@ def init_session_state():
 def render_chat_interface(chatbot: AgenticChatbot):
     """Render the main chat interface."""
     # Page header
-    st.title("🤖 Agentic AI Chatbot")
-    st.markdown("""
-    **Powered by Advanced RAG System** | Plan→Act→Reflect Reasoning | Document-Grounded Responses
+    st.title("🤖 AI Chatbot")
+    st.markdown("Ask me anything! I can help with questions and provide detailed answers.")
     
-    Ask me anything! I can search through documents, reason about complex queries, and provide accurate answers with source attribution.
-    """)
-    
-    # Control panel
-    col1, col2, col3, col4 = st.columns([1, 1, 1, 5])
+    # Simple control panel
+    col1, col2, col3 = st.columns([1, 1, 4])
     
     with col1:
-        if st.button("🗑️ Clear Chat", use_container_width=True):
+        if st.button("🗑️ Clear", use_container_width=True):
             st.session_state.messages = []
             st.session_state.conversation_started = False
             chatbot.clear_conversation()
             st.rerun()
     
     with col2:
-        if st.button("📊 Stats", use_container_width=True):
-            summary = chatbot.get_conversation_summary()
-            st.info(f"💬 {summary}")
-    
-    with col3:
         # RAG status indicator
         if chatbot._agentic_agent:
             rag_status = chatbot.get_agentic_status()
@@ -226,13 +190,13 @@ def render_chat_interface(chatbot: AgenticChatbot):
                 vector_stats = rag_status["components"].get("vector_store", {})
                 total_chunks = vector_stats.get("total_chunks", 0)
                 if total_chunks > 0:
-                    st.success(f"📚 {total_chunks} docs")
+                    st.success(f"📚 RAG On")
                 else:
-                    st.warning("📚 No docs")
+                    st.warning("📚 RAG Off")
             else:
-                st.info("📚 RAG off")
+                st.info("📚 RAG Off")
         else:
-            st.info("📚 RAG off")
+            st.info("📚 RAG Off")
     
     # Initialize conversation
     if not st.session_state.conversation_started:
@@ -247,20 +211,7 @@ def render_chat_interface(chatbot: AgenticChatbot):
         st.session_state.conversation_started = True
         st.session_state.messages.append({
             "role": "assistant",
-            "content": """Hello! I'm your **Agentic AI Assistant** with advanced reasoning capabilities. 
-
-🧠 **What I can do:**
-- **Plan→Act→Reflect** reasoning for complex queries
-- Search and analyze documents with hybrid retrieval
-- Provide source-attributed answers
-- Handle multi-step problem solving
-
-💬 **How to use me:**
-- Ask questions about any topic
-- Request document analysis or summaries
-- Pose complex problems that need step-by-step reasoning
-
-What would you like to explore today?"""
+            "content": "Hello! I'm your AI assistant. How can I help you today?"
         })
     
     # Display chat history
@@ -277,7 +228,7 @@ What would you like to explore today?"""
         
         # Generate response
         with st.chat_message("assistant"):
-            with st.spinner("🧠 Processing with agentic reasoning..."):
+            with st.spinner("Thinking..."):
                 import asyncio
                 try:
                     loop = asyncio.get_event_loop()
@@ -292,58 +243,14 @@ What would you like to explore today?"""
         st.session_state.messages.append({"role": "assistant", "content": response})
 
 
-def render_sidebar():
-    """Render the sidebar with additional information."""
-    with st.sidebar:
-        st.header("🛠️ System Information")
-        
-        # Deployment info
-        st.subheader("📡 Deployment")
-        st.info("Running on Streamlit Cloud")
-        
-        # Features
-        st.subheader("🚀 Features")
-        st.markdown("""
-        - **Agentic Reasoning**: Plan→Act→Reflect
-        - **RAG System**: Document retrieval & analysis
-        - **Hybrid Search**: Semantic + keyword matching
-        - **Source Attribution**: Traceable responses
-        - **Conversation Memory**: Context-aware chat
-        """)
-        
-        # Usage tips
-        st.subheader("💡 Usage Tips")
-        st.markdown("""
-        - Be specific in your questions
-        - Ask for step-by-step explanations
-        - Request document analysis
-        - Use follow-up questions for clarity
-        """)
-        
-        # Technical details
-        with st.expander("🔧 Technical Details"):
-            st.markdown("""
-            **AI Model**: Groq (Llama-3.1-70b)
-            **Embeddings**: MiniLM-L6-v2
-            **Vector Store**: ChromaDB
-            **Chunking**: 580-token average
-            **Search**: Hybrid semantic + keyword
-            """)
-
-
 def main():
     """Main application entry point for Streamlit Cloud."""
     # Configure page
     st.set_page_config(
-        page_title="Agentic AI Chatbot",
+        page_title="AI Chatbot",
         page_icon="🤖",
-        layout="wide",
-        initial_sidebar_state="expanded",
-        menu_items={
-            'Get Help': 'https://github.com/your-repo/chatbot',
-            'Report a bug': 'https://github.com/your-repo/chatbot/issues',
-            'About': 'Agentic AI Chatbot with Advanced RAG System'
-        }
+        layout="centered",
+        initial_sidebar_state="collapsed"
     )
     
     # Setup cloud environment
@@ -356,8 +263,7 @@ def main():
         # Create chatbot instance
         chatbot = create_chatbot()
         
-        # Render UI components
-        render_sidebar()
+        # Render chat interface
         render_chat_interface(chatbot)
         
     except ConfigurationError as e:
