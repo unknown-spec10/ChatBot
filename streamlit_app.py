@@ -75,18 +75,32 @@ def create_chatbot() -> AgenticChatbot:
                 st.info(f"📋 ChromaDB contents: {contents}")
             else:
                 st.error(f"❌ ChromaDB directory not found at: {persist_dir}")
+                vector_store = None
+                return AgenticChatbot(
+                    ai_provider=ai_provider,
+                    message_handler=message_handler,
+                    config=config,
+                    vector_store=None
+                )
             
-            vector_store = EnhancedChromaVectorStore(
-                embedding_service=embedding_service,
-                persist_directory=persist_dir
-            )
-            
-            # Check if pre-computed embeddings exist
-            stats = vector_store.get_collection_stats()
-            if stats.get('total_chunks', 0) > 0:
-                st.success(f"✅ RAG System: {stats['total_chunks']} document chunks loaded from pre-computed embeddings")
-            else:
-                st.warning("⚠️ RAG System: No pre-computed embeddings found - RAG will be disabled")
+            # Try to initialize vector store with error handling
+            try:
+                vector_store = EnhancedChromaVectorStore(
+                    embedding_service=embedding_service,
+                    persist_directory=persist_dir
+                )
+                
+                # Check if pre-computed embeddings exist
+                stats = vector_store.get_collection_stats()
+                if stats.get('total_chunks', 0) > 0:
+                    st.success(f"✅ RAG System: {stats['total_chunks']} document chunks loaded from pre-computed embeddings")
+                else:
+                    st.warning("⚠️ RAG System: No pre-computed embeddings found - RAG will be disabled")
+                    vector_store = None
+                    
+            except Exception as vs_error:
+                st.error(f"❌ ChromaDB initialization failed: {str(vs_error)}")
+                st.info("🔄 Running without RAG functionality")
                 vector_store = None
                 
         except Exception as e:

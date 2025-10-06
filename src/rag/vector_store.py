@@ -143,46 +143,75 @@ class EnhancedChromaVectorStore:
         
         self.embedding_function = MiniLMEmbeddingFunction(embedding_service)
         
-        self.client = chromadb.PersistentClient(
-            path=persist_directory,
-            settings=Settings(anonymized_telemetry=False)
-        )
+        # Initialize ChromaDB client with safer settings
+        try:
+            self.client = chromadb.PersistentClient(
+                path=persist_directory,
+                settings=Settings(
+                    anonymized_telemetry=False,
+                    allow_reset=True  # Allow reset if needed
+                )
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to create PersistentClient with custom settings: {e}")
+            # Fallback to basic client
+            self.client = chromadb.PersistentClient(path=persist_directory)
         
-        self.collection = self._get_or_create_collection()
-        
-        self.logger.info(f"Initialized ChromaDB at {persist_directory}")
+        # Try to initialize collection with extensive error handling
+        try:
+            self.collection = self._get_or_create_collection()
+            self.logger.info(f"Successfully initialized ChromaDB at {persist_directory}")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize collection: {e}")
+            raise RuntimeError(f"ChromaDB initialization failed: {e}")
     
     def _get_or_create_collection(self):
-        """Get existing collection or create new one."""
+        """Get existing collection or create new one with better error handling."""
         try:
-            # First try to get existing collection (without embedding function)
-            collection = self.client.get_collection(
-                name=self.collection_name
-            )
+            # First try to get existing collection
+            collection = self.client.get_collection(name=self.collection_name)
             self.logger.info(f"Loaded existing collection: {self.collection_name}")
             return collection
-        except Exception:
-            try:
-                # Try to create new collection (without embedding function since we'll embed manually)
-                collection = self.client.create_collection(
-                    name=self.collection_name,
-                    metadata={"hnsw:space": "cosine"}  # Ensure cosine similarity
-                )
-                self.logger.info(f"Created new collection: {self.collection_name}")
-                return collection
-            except Exception as e:
-                # If collection exists but we can't get it, delete and recreate
+        except ValueError as e:
+            if "does not exist" in str(e).lower():
+                # Collection doesn't exist, create it
+                try:
+                    collection = self.client.create_collection(
+                        name=self.collection_name,
+                        metadata={"hnsw:space": "cosine"}
+                    )
+                    self.logger.info(f"Created new collection: {self.collection_name}")
+                    return collection
+                except Exception as create_e:
+                    self.logger.error(f"Failed to create collection: {create_e}")
+                    raise
+            else:
+                # Different ValueError, try to recreate
+                self.logger.warning(f"Collection access error: {e}")
                 try:
                     self.client.delete_collection(name=self.collection_name)
                     collection = self.client.create_collection(
                         name=self.collection_name,
                         metadata={"hnsw:space": "cosine"}
                     )
-                    self.logger.info(f"Recreated collection: {self.collection_name}")
+                    self.logger.info(f"Recreated collection after error: {self.collection_name}")
                     return collection
                 except Exception as final_e:
-                    self.logger.error(f"Failed to create collection: {final_e}")
+                    self.logger.error(f"Failed to recreate collection: {final_e}")
                     raise
+        except Exception as e:
+            # Any other exception
+            self.logger.warning(f"Unexpected error accessing collection: {e}")
+            try:
+                # Try to create collection with simpler metadata
+                collection = self.client.create_collection(
+                    name=self.collection_name
+                )
+                self.logger.info(f"Created collection with default settings: {self.collection_name}")
+                return collection
+            except Exception as final_e:
+                self.logger.error(f"Failed to create collection: {final_e}")
+                raise
     
     def add_chunks(self, chunks: List[DocumentChunk]) -> None:
         """
@@ -218,12 +247,20 @@ class EnhancedChromaVectorStore:
             self.logger.info(f"Generating embeddings for {len(documents)} documents...")
             embeddings = self.embedding_service.embed_batch(documents)
             
+            # Convert embeddings to the format ChromaDB expects (flatten if needed)
+            processed_embeddings = []
+            for emb in embeddings:
+                if isinstance(emb, list):
+                    processed_embeddings.append(emb)
+                else:
+                    processed_embeddings.append(emb.tolist() if hasattr(emb, 'tolist') else list(emb))
+            
             # Add to collection with manual embeddings
             self.collection.add(
                 ids=ids,
                 documents=documents,
                 metadatas=metadatas,
-                embeddings=embeddings
+                embeddings=processed_embeddings
             )
             
             self.logger.info(f"Added {len(chunks)} chunks to vector store")
