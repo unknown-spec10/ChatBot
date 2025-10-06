@@ -95,8 +95,70 @@ def create_chatbot() -> AgenticChatbot:
                 if stats.get('total_chunks', 0) > 0:
                     st.success(f"✅ RAG System: {stats['total_chunks']} document chunks loaded from pre-computed embeddings")
                 else:
-                    st.warning("⚠️ RAG System: No pre-computed embeddings found - RAG will be disabled")
-                    vector_store = None
+                    st.warning("⚠️ RAG System: No pre-computed embeddings found - attempting to load documents...")
+                    
+                    # Try to auto-ingest documents in cloud environment
+                    try:
+                        from src.rag.document_processor import DocumentProcessor
+                        from pathlib import Path
+                        
+                        # Check for documents directory
+                        data_dir = Path("./data")
+                        documents_dir = data_dir / "documents"
+                        
+                        if documents_dir.exists() and any(documents_dir.iterdir()):
+                            st.info("📄 Found documents - initializing RAG system...")
+                            
+                            # Initialize document processor
+                            processor = DocumentProcessor(
+                                chunk_size=400,
+                                chunk_overlap=60,
+                                min_chunk_size=50
+                            )
+                            
+                            # Get document files
+                            supported_extensions = {'.txt', '.md', '.pdf'}
+                            doc_files = [
+                                f for f in documents_dir.iterdir() 
+                                if f.is_file() and f.suffix.lower() in supported_extensions
+                            ]
+                            
+                            if doc_files:
+                                st.info(f"🔄 Processing {len(doc_files)} document(s)...")
+                                
+                                # Process documents
+                                all_chunks = []
+                                for doc_file in doc_files:
+                                    try:
+                                        chunks = processor.process_document(str(doc_file))
+                                        all_chunks.extend(chunks)
+                                        st.info(f"✅ Processed {doc_file.name}: {len(chunks)} chunks")
+                                    except Exception as doc_error:
+                                        st.warning(f"⚠️ Failed to process {doc_file.name}: {doc_error}")
+                                
+                                if all_chunks:
+                                    # Add chunks to vector store
+                                    st.info(f"💾 Adding {len(all_chunks)} chunks to vector store...")
+                                    vector_store.add_chunks(all_chunks)
+                                    
+                                    # Verify ingestion
+                                    final_stats = vector_store.get_collection_stats()
+                                    st.success(f"✅ RAG System initialized: {final_stats['total_chunks']} document chunks loaded")
+                                else:
+                                    st.error("❌ No document chunks were created")
+                                    vector_store = None
+                            else:
+                                st.error(f"❌ No supported documents found in {documents_dir}")
+                                vector_store = None
+                        else:
+                            st.error(f"❌ Documents directory not found or empty: {documents_dir}")
+                            vector_store = None
+                            
+                    except Exception as ingest_error:
+                        st.error(f"❌ Failed to auto-ingest documents: {ingest_error}")
+                        st.info("� If you're deploying to cloud, ensure the 'data/documents/' directory and files are included in your deployment")
+                        st.info("�🔄 Running without RAG functionality - using general AI knowledge only")
+                        vector_store = None
                     
             except Exception as vs_error:
                 st.error(f"❌ ChromaDB initialization failed: {str(vs_error)}")

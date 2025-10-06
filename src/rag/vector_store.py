@@ -383,10 +383,15 @@ class EnhancedChromaVectorStore:
             query_embedding = self.embedding_service.embed_query(expanded_query)
             
             # Convert numpy array to list if needed for ChromaDB compatibility
-            if hasattr(query_embedding, 'tolist'):
-                query_embedding = query_embedding.tolist()
-            elif not isinstance(query_embedding, list):
-                query_embedding = list(query_embedding)
+            try:
+                import numpy as np
+                if isinstance(query_embedding, np.ndarray):
+                    query_embedding = query_embedding.tolist()
+                elif not isinstance(query_embedding, list):
+                    query_embedding = list(query_embedding)
+            except ImportError:
+                if not isinstance(query_embedding, list):
+                    query_embedding = list(query_embedding)
             
             # Search the collection using query_embeddings instead of query_texts
             results = self.collection.query(

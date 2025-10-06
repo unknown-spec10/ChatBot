@@ -90,6 +90,3 @@ Desktop.ini
 *~
 #streamlit secrets only - keep config.toml for deployment
 .streamlit/secrets.toml
-
-# Data files - Original documents not needed for deployment
-data/
