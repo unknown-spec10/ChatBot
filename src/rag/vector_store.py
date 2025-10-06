@@ -145,17 +145,27 @@ class EnhancedChromaVectorStore:
         
         # Initialize ChromaDB client with safer settings
         try:
+            # First try with safe settings
             self.client = chromadb.PersistentClient(
                 path=persist_directory,
                 settings=Settings(
                     anonymized_telemetry=False,
-                    allow_reset=True  # Allow reset if needed
+                    allow_reset=True,
+                    is_persistent=True
                 )
             )
         except Exception as e:
             self.logger.warning(f"Failed to create PersistentClient with custom settings: {e}")
-            # Fallback to basic client
-            self.client = chromadb.PersistentClient(path=persist_directory)
+            try:
+                # Fallback to basic client
+                self.client = chromadb.PersistentClient(
+                    path=persist_directory,
+                    settings=Settings(anonymized_telemetry=False)
+                )
+            except Exception as e2:
+                self.logger.warning(f"Failed with basic settings: {e2}")
+                # Final fallback - minimal client
+                self.client = chromadb.PersistentClient(path=persist_directory)
         
         # Try to initialize collection with extensive error handling
         try:
@@ -163,55 +173,81 @@ class EnhancedChromaVectorStore:
             self.logger.info(f"Successfully initialized ChromaDB at {persist_directory}")
         except Exception as e:
             self.logger.error(f"Failed to initialize collection: {e}")
-            raise RuntimeError(f"ChromaDB initialization failed: {e}")
+            # If we get the '_type' error, try resetting the entire database
+            if "_type" in str(e).lower():
+                self.logger.warning("Attempting to reset ChromaDB due to '_type' error")
+                try:
+                    # Reset and try again
+                    self.client.reset()
+                    self.collection = self._get_or_create_collection()
+                    self.logger.info("Successfully reset and initialized ChromaDB")
+                except Exception as reset_e:
+                    self.logger.error(f"Reset also failed: {reset_e}")
+                    raise RuntimeError(f"ChromaDB initialization failed even after reset: {reset_e}")
+            else:
+                raise RuntimeError(f"ChromaDB initialization failed: {e}")
     
     def _get_or_create_collection(self):
         """Get existing collection or create new one with better error handling."""
-        try:
-            # First try to get existing collection
-            collection = self.client.get_collection(name=self.collection_name)
-            self.logger.info(f"Loaded existing collection: {self.collection_name}")
-            return collection
-        except ValueError as e:
-            if "does not exist" in str(e).lower():
-                # Collection doesn't exist, create it
-                try:
-                    collection = self.client.create_collection(
-                        name=self.collection_name,
-                        metadata={"hnsw:space": "cosine"}
-                    )
-                    self.logger.info(f"Created new collection: {self.collection_name}")
-                    return collection
-                except Exception as create_e:
-                    self.logger.error(f"Failed to create collection: {create_e}")
-                    raise
-            else:
-                # Different ValueError, try to recreate
-                self.logger.warning(f"Collection access error: {e}")
-                try:
-                    self.client.delete_collection(name=self.collection_name)
-                    collection = self.client.create_collection(
-                        name=self.collection_name,
-                        metadata={"hnsw:space": "cosine"}
-                    )
-                    self.logger.info(f"Recreated collection after error: {self.collection_name}")
-                    return collection
-                except Exception as final_e:
-                    self.logger.error(f"Failed to recreate collection: {final_e}")
-                    raise
-        except Exception as e:
-            # Any other exception
-            self.logger.warning(f"Unexpected error accessing collection: {e}")
+        collection_created = False
+        
+        # Try multiple strategies to handle the '_type' error
+        strategies = [
+            # Strategy 1: Try to get existing collection
+            lambda: self.client.get_collection(name=self.collection_name),
+            
+            # Strategy 2: Create with cosine metadata
+            lambda: self.client.create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"}
+            ),
+            
+            # Strategy 3: Create with minimal metadata
+            lambda: self.client.create_collection(
+                name=self.collection_name,
+                metadata={}
+            ),
+            
+            # Strategy 4: Create with no metadata
+            lambda: self.client.create_collection(name=self.collection_name),
+            
+            # Strategy 5: Delete and recreate
+            lambda: self._force_recreate_collection()
+        ]
+        
+        for i, strategy in enumerate(strategies, 1):
             try:
-                # Try to create collection with simpler metadata
-                collection = self.client.create_collection(
-                    name=self.collection_name
-                )
-                self.logger.info(f"Created collection with default settings: {self.collection_name}")
+                collection = strategy()
+                if i > 1:  # If we had to create (not just get)
+                    self.logger.info(f"Created collection using strategy {i}: {self.collection_name}")
+                    collection_created = True
+                else:
+                    self.logger.info(f"Loaded existing collection: {self.collection_name}")
                 return collection
-            except Exception as final_e:
-                self.logger.error(f"Failed to create collection: {final_e}")
-                raise
+                
+            except Exception as e:
+                error_str = str(e).lower()
+                self.logger.warning(f"Strategy {i} failed: {e}")
+                
+                # If it's the '_type' error, continue to next strategy
+                if "_type" in error_str or "does not exist" in error_str:
+                    continue
+                elif i == len(strategies):  # Last strategy failed
+                    self.logger.error(f"All strategies failed. Last error: {e}")
+                    raise RuntimeError(f"Unable to initialize ChromaDB collection: {e}")
+        
+        # Should never reach here
+        raise RuntimeError("Failed to create collection with any strategy")
+    
+    def _force_recreate_collection(self):
+        """Force delete and recreate collection."""
+        try:
+            self.client.delete_collection(name=self.collection_name)
+            self.logger.info(f"Deleted existing collection: {self.collection_name}")
+        except Exception:
+            pass  # Collection might not exist
+        
+        return self.client.create_collection(name=self.collection_name)
     
     def add_chunks(self, chunks: List[DocumentChunk]) -> None:
         """
