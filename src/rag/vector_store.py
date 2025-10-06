@@ -143,29 +143,32 @@ class EnhancedChromaVectorStore:
         
         self.embedding_function = MiniLMEmbeddingFunction(embedding_service)
         
-        # Initialize ChromaDB client with safer settings
+        # Initialize ChromaDB client with version-compatible settings
         try:
-            # First try with safe settings
+            # For ChromaDB 1.1.0+, use updated settings approach
             self.client = chromadb.PersistentClient(
                 path=persist_directory,
                 settings=Settings(
                     anonymized_telemetry=False,
-                    allow_reset=True,
-                    is_persistent=True
+                    allow_reset=True
                 )
             )
         except Exception as e:
             self.logger.warning(f"Failed to create PersistentClient with custom settings: {e}")
             try:
-                # Fallback to basic client
+                # Fallback to basic client with minimal settings
                 self.client = chromadb.PersistentClient(
                     path=persist_directory,
                     settings=Settings(anonymized_telemetry=False)
                 )
             except Exception as e2:
                 self.logger.warning(f"Failed with basic settings: {e2}")
-                # Final fallback - minimal client
-                self.client = chromadb.PersistentClient(path=persist_directory)
+                try:
+                    # Final fallback - minimal client without custom settings
+                    self.client = chromadb.PersistentClient(path=persist_directory)
+                except Exception as e3:
+                    self.logger.error(f"All client initialization attempts failed: {e3}")
+                    raise RuntimeError(f"Unable to initialize ChromaDB client: {e3}")
         
         # Try to initialize collection with extensive error handling
         try:
@@ -173,46 +176,28 @@ class EnhancedChromaVectorStore:
             self.logger.info(f"Successfully initialized ChromaDB at {persist_directory}")
         except Exception as e:
             self.logger.error(f"Failed to initialize collection: {e}")
-            # If we get the '_type' error, try resetting the entire database
-            if "_type" in str(e).lower():
-                self.logger.warning("Attempting to reset ChromaDB due to '_type' error")
-                try:
-                    # Reset and try again
-                    self.client.reset()
-                    self.collection = self._get_or_create_collection()
-                    self.logger.info("Successfully reset and initialized ChromaDB")
-                except Exception as reset_e:
-                    self.logger.error(f"Reset also failed: {reset_e}")
-                    raise RuntimeError(f"ChromaDB initialization failed even after reset: {reset_e}")
-            else:
-                raise RuntimeError(f"ChromaDB initialization failed: {e}")
+            raise RuntimeError(f"ChromaDB initialization failed: {e}")
     
     def _get_or_create_collection(self):
         """Get existing collection or create new one with better error handling."""
         collection_created = False
         
-        # Try multiple strategies to handle the '_type' error
+        # Try multiple strategies to handle version compatibility issues
         strategies = [
             # Strategy 1: Try to get existing collection
-            lambda: self.client.get_collection(name=self.collection_name),
+            self._try_get_existing_collection,
             
             # Strategy 2: Create with cosine metadata
-            lambda: self.client.create_collection(
-                name=self.collection_name,
-                metadata={"hnsw:space": "cosine"}
-            ),
+            self._try_create_with_cosine_metadata,
             
             # Strategy 3: Create with minimal metadata
-            lambda: self.client.create_collection(
-                name=self.collection_name,
-                metadata={}
-            ),
+            self._try_create_with_minimal_metadata,
             
             # Strategy 4: Create with no metadata
-            lambda: self.client.create_collection(name=self.collection_name),
+            self._try_create_with_no_metadata,
             
-            # Strategy 5: Delete and recreate
-            lambda: self._force_recreate_collection()
+            # Strategy 5: Reset database and recreate
+            self._try_reset_and_recreate
         ]
         
         for i, strategy in enumerate(strategies, 1):
@@ -229,8 +214,11 @@ class EnhancedChromaVectorStore:
                 error_str = str(e).lower()
                 self.logger.warning(f"Strategy {i} failed: {e}")
                 
-                # If it's the '_type' error, continue to next strategy
-                if "_type" in error_str or "does not exist" in error_str:
+                # Check for specific error patterns
+                if any(pattern in error_str for pattern in [
+                    "no such column", "collections.topic", "_type", 
+                    "does not exist", "schema", "version"
+                ]):
                     continue
                 elif i == len(strategies):  # Last strategy failed
                     self.logger.error(f"All strategies failed. Last error: {e}")
@@ -239,15 +227,41 @@ class EnhancedChromaVectorStore:
         # Should never reach here
         raise RuntimeError("Failed to create collection with any strategy")
     
-    def _force_recreate_collection(self):
-        """Force delete and recreate collection."""
-        try:
-            self.client.delete_collection(name=self.collection_name)
-            self.logger.info(f"Deleted existing collection: {self.collection_name}")
-        except Exception:
-            pass  # Collection might not exist
-        
+    def _try_get_existing_collection(self):
+        """Strategy 1: Try to get existing collection."""
+        return self.client.get_collection(name=self.collection_name)
+    
+    def _try_create_with_cosine_metadata(self):
+        """Strategy 2: Create with cosine metadata."""
+        return self.client.create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
+    
+    def _try_create_with_minimal_metadata(self):
+        """Strategy 3: Create with minimal metadata."""
+        return self.client.create_collection(
+            name=self.collection_name,
+            metadata={}
+        )
+    
+    def _try_create_with_no_metadata(self):
+        """Strategy 4: Create with no metadata."""
         return self.client.create_collection(name=self.collection_name)
+    
+    def _try_reset_and_recreate(self):
+        """Strategy 5: Reset database and recreate."""
+        try:
+            # Try to reset the entire database to fix schema issues
+            self.logger.warning("Attempting to reset ChromaDB database due to schema incompatibility")
+            self.client.reset()
+            self.logger.info("Successfully reset ChromaDB database")
+        except Exception as reset_error:
+            self.logger.warning(f"Database reset failed: {reset_error}")
+        
+        # Create new collection after reset
+        return self.client.create_collection(name=self.collection_name)
+
     
     def add_chunks(self, chunks: List[DocumentChunk]) -> None:
         """
@@ -367,6 +381,12 @@ class EnhancedChromaVectorStore:
             
             # Generate query embedding manually to avoid ChromaDB issues
             query_embedding = self.embedding_service.embed_query(expanded_query)
+            
+            # Convert numpy array to list if needed for ChromaDB compatibility
+            if hasattr(query_embedding, 'tolist'):
+                query_embedding = query_embedding.tolist()
+            elif not isinstance(query_embedding, list):
+                query_embedding = list(query_embedding)
             
             # Search the collection using query_embeddings instead of query_texts
             results = self.collection.query(
