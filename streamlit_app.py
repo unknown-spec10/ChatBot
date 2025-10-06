@@ -83,7 +83,7 @@ def create_chatbot() -> AgenticChatbot:
                 stats = vector_store.get_collection_stats()
                 if stats.get('total_chunks', 0) == 0:
                     
-                    # Try to auto-ingest documents silently
+                    # Try to auto-ingest documents silently using same strategy as ingestion script
                     try:
                         from src.rag.document_processor import DocumentProcessor
                         from pathlib import Path
@@ -94,14 +94,13 @@ def create_chatbot() -> AgenticChatbot:
                         
                         if documents_dir.exists() and any(documents_dir.iterdir()):
                             
-                            # Initialize document processor
                             processor = DocumentProcessor(
-                                chunk_size=400,
-                                chunk_overlap=60,
-                                min_chunk_size=50
+                                chunk_size=700,        # Target 700 tokens
+                                chunk_overlap=100,     # Higher overlap for continuity
+                                min_chunk_size=50      # Minimum 50 tokens
                             )
                             
-                            # Get document files
+                            # Get document files with same extensions as ingestion script
                             supported_extensions = {'.txt', '.md', '.pdf'}
                             doc_files = [
                                 f for f in documents_dir.iterdir() 
@@ -109,7 +108,10 @@ def create_chatbot() -> AgenticChatbot:
                             ]
                             
                             if doc_files:
-                                # Process documents silently
+                                # Clear existing collection first (same as ingestion script)
+                                vector_store.delete_collection()
+                                
+                                # Process documents with same strategy as ingestion script
                                 all_chunks = []
                                 for doc_file in doc_files:
                                     try:
@@ -169,8 +171,8 @@ def init_session_state():
 def render_chat_interface(chatbot: AgenticChatbot):
     """Render the main chat interface."""
     # Page header
-    st.title("🤖 AI Chatbot")
-    st.markdown("Ask me anything! I can help with questions and provide detailed answers.")
+    st.title("🤖 Deep AI ")
+    st.markdown("Ask me anything! I'm here to help.")
     
     # Simple control panel
     col1, col2, col3 = st.columns([1, 1, 4])
@@ -211,7 +213,7 @@ def render_chat_interface(chatbot: AgenticChatbot):
         st.session_state.conversation_started = True
         st.session_state.messages.append({
             "role": "assistant",
-            "content": "Hello! I'm your AI assistant. How can I help you today?"
+            "content": "Hello! How can I help you today?"
         })
     
     # Display chat history
